@@ -1,0 +1,833 @@
+=====FILE settings.gradle.kts=====
+pluginManagement {
+    repositories { google(); mavenCentral(); gradlePluginPortal() }
+}
+dependencyResolutionManagement {
+    repositories { google(); mavenCentral() }
+}
+rootProject.name = "HorizonLauncher"
+include(":app")
+=====FILE build.gradle.kts=====
+plugins {
+    id("com.android.application") version "8.5.2" apply false
+    id("org.jetbrains.kotlin.android") version "2.0.20" apply false
+}
+=====FILE gradle.properties=====
+org.gradle.jvmargs=-Xmx2048m -Dfile.encoding=UTF-8
+android.useAndroidX=false
+kotlin.code.style=official
+=====FILE app/build.gradle.kts=====
+plugins {
+    id("com.android.application")
+    id("org.jetbrains.kotlin.android")
+}
+
+android {
+    namespace = "com.horizon.launcher"
+    compileSdk = 34
+
+    defaultConfig {
+        applicationId = "com.horizon.launcher"
+        minSdk = 26
+        targetSdk = 34
+        versionCode = 1
+        versionName = "1.0"
+    }
+
+    buildTypes {
+        release {
+            isMinifyEnabled = false
+            // Signed with the debug key so you can sideload it straight away.
+            signingConfig = signingConfigs.getByName("debug")
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility = JavaVersion.VERSION_17
+        targetCompatibility = JavaVersion.VERSION_17
+    }
+    kotlinOptions { jvmTarget = "17" }
+}
+// No third-party dependencies — just the Android framework.
+=====FILE app/src/main/AndroidManifest.xml=====
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <uses-permission android:name="android.permission.INTERNET" />
+
+    <uses-feature android:name="android.software.leanback" android:required="false" />
+    <uses-feature android:name="android.hardware.touchscreen" android:required="false" />
+
+    <!-- Android 11+ package visibility: let us see every launchable app -->
+    <queries>
+        <intent>
+            <action android:name="android.intent.action.MAIN" />
+            <category android:name="android.intent.category.LEANBACK_LAUNCHER" />
+        </intent>
+        <intent>
+            <action android:name="android.intent.action.MAIN" />
+            <category android:name="android.intent.category.LAUNCHER" />
+        </intent>
+    </queries>
+
+    <application
+        android:label="Horizon"
+        android:icon="@drawable/ic_launcher"
+        android:banner="@drawable/banner"
+        android:allowBackup="true"
+        android:theme="@android:style/Theme.DeviceDefault.NoActionBar.Fullscreen">
+
+        <activity
+            android:name=".MainActivity"
+            android:exported="true"
+            android:launchMode="singleTask"
+            android:stateNotNeeded="true"
+            android:clearTaskOnLaunch="true"
+            android:screenOrientation="landscape"
+            android:configChanges="keyboard|keyboardHidden|navigation|orientation|screenSize|screenLayout|smallestScreenSize|uiMode|density">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.HOME" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.LEANBACK_LAUNCHER" />
+            </intent-filter>
+        </activity>
+    </application>
+</manifest>
+=====FILE app/src/main/res/drawable/banner.xml=====
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="320dp" android:height="180dp"
+    android:viewportWidth="320" android:viewportHeight="180">
+    <path android:fillColor="#0B0F2C" android:pathData="M0,0h320v180h-320z" />
+    <path android:fillColor="#4B2766" android:pathData="M0,110h320v70h-320z" />
+    <path android:fillColor="#FFA66E" android:pathData="M110,120a50,50 0 0,1 100,0z" />
+    <path android:fillColor="#FFFFFF" android:fillAlpha="0.6" android:pathData="M20,119h280v2h-280z" />
+    <path android:fillColor="#FFFFFF" android:pathData="M60,40a2,2 0 1,0 4,0a2,2 0 1,0 -4,0z M250,30a2,2 0 1,0 4,0a2,2 0 1,0 -4,0z M200,60a1.5,1.5 0 1,0 3,0a1.5,1.5 0 1,0 -3,0z M100,70a1.5,1.5 0 1,0 3,0a1.5,1.5 0 1,0 -3,0z" />
+</vector>
+=====FILE app/src/main/res/drawable/ic_launcher.xml=====
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp" android:height="108dp"
+    android:viewportWidth="108" android:viewportHeight="108">
+    <path android:fillColor="#0B0F2C" android:pathData="M0,0h108v108h-108z" />
+    <path android:fillColor="#4B2766" android:pathData="M0,66h108v42h-108z" />
+    <path android:fillColor="#FFA66E" android:pathData="M30,66a24,24 0 0,1 48,0z" />
+</vector>
+=====FILE app/src/main/java/com/horizon/launcher/MainActivity.kt=====
+package com.horizon.launcher
+
+import android.app.Activity
+import android.content.Intent
+import android.graphics.Bitmap
+import android.graphics.Canvas
+import android.graphics.Color
+import android.graphics.drawable.BitmapDrawable
+import android.graphics.drawable.Drawable
+import android.net.Uri
+import android.os.Bundle
+import android.provider.Settings
+import android.view.KeyEvent
+import android.webkit.JavascriptInterface
+import android.webkit.WebResourceRequest
+import android.webkit.WebResourceResponse
+import android.webkit.WebView
+import android.webkit.WebViewClient
+import org.json.JSONArray
+import org.json.JSONObject
+import java.io.ByteArrayInputStream
+import java.io.ByteArrayOutputStream
+import java.util.concurrent.ConcurrentHashMap
+
+/**
+ * Horizon — a tiny native shell around a web UI (assets/index.html).
+ * The page is served from a fake https origin so localStorage and canvas colour sampling work,
+ * and app icons/banners are streamed to it at https://launcher.local/icon/<package>.
+ */
+class MainActivity : Activity() {
+
+    companion object { private const val HOST = "launcher.local" }
+
+    private lateinit var web: WebView
+    private val iconCache = ConcurrentHashMap<String, ByteArray>()
+
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+        web = WebView(this).apply {
+            setBackgroundColor(Color.BLACK)
+            isFocusable = true
+            isFocusableInTouchMode = true
+            settings.javaScriptEnabled = true
+            settings.domStorageEnabled = true
+            addJavascriptInterface(Bridge(), "Android")
+            webViewClient = object : WebViewClient() {
+                override fun shouldInterceptRequest(view: WebView, request: WebResourceRequest): WebResourceResponse? =
+                    if (request.url.host == HOST) serve(request.url) else null
+            }
+        }
+        setContentView(web)
+        web.loadUrl("https://$HOST/index.html")
+        web.requestFocus()
+    }
+
+    override fun onResume() {
+        super.onResume()
+        js("window.onResumeLauncher && onResumeLauncher()")
+    }
+
+    // Home pressed while we're already in front → jump back to the first row.
+    override fun onNewIntent(intent: Intent?) {
+        super.onNewIntent(intent)
+        js("window.onHome && onHome()")
+    }
+
+    // A launcher never closes on Back.
+    @Suppress("OVERRIDE_DEPRECATION", "DEPRECATION")
+    override fun onBackPressed() {
+        js("window.onBack && onBack()")
+    }
+
+    // Remote's menu / options key → pin or unpin the focused app.
+    override fun dispatchKeyEvent(event: KeyEvent): Boolean {
+        if (event.keyCode == KeyEvent.KEYCODE_MENU) {
+            if (event.action == KeyEvent.ACTION_UP) js("window.onMenu && onMenu()")
+            return true
+        }
+        return super.dispatchKeyEvent(event)
+    }
+
+    private fun js(code: String) {
+        if (::web.isInitialized) web.evaluateJavascript(code, null)
+    }
+
+    // ---------- local web server ----------
+
+    private fun serve(uri: Uri): WebResourceResponse? {
+        val path = uri.path ?: "/"
+        return try {
+            if (path.startsWith("/icon/")) {
+                val pkg = Uri.decode(path.removePrefix("/icon/"))
+                val bytes = iconCache[pkg] ?: renderIcon(pkg)?.also { iconCache[pkg] = it } ?: return null
+                WebResourceResponse("image/png", null, ByteArrayInputStream(bytes))
+            } else {
+                val file = path.trimStart('/').ifEmpty { "index.html" }
+                val mime = when {
+                    file.endsWith(".html") -> "text/html"
+                    file.endsWith(".js") -> "application/javascript"
+                    file.endsWith(".css") -> "text/css"
+                    file.endsWith(".svg") -> "image/svg+xml"
+                    file.endsWith(".png") -> "image/png"
+                    else -> "application/octet-stream"
+                }
+                WebResourceResponse(mime, "utf-8", assets.open(file))
+            }
+        } catch (e: Exception) {
+            null
+        }
+    }
+
+    /** Prefer the app's TV banner (320x180); fall back to its icon. */
+    private fun renderIcon(pkg: String): ByteArray? {
+        val pm = packageManager
+        val intent = pm.getLeanbackLaunchIntentForPackage(pkg) ?: pm.getLaunchIntentForPackage(pkg)
+        val d: Drawable = intent?.let { runCatching { pm.getActivityBanner(it) }.getOrNull() }
+            ?: runCatching { pm.getApplicationBanner(pkg) }.getOrNull()
+            ?: intent?.let { runCatching { pm.getActivityIcon(it) }.getOrNull() }
+            ?: runCatching { pm.getApplicationIcon(pkg) }.getOrNull()
+            ?: return null
+        val out = ByteArrayOutputStream()
+        toBitmap(d).compress(Bitmap.CompressFormat.PNG, 100, out)
+        return out.toByteArray()
+    }
+
+    private fun toBitmap(d: Drawable): Bitmap {
+        if (d is BitmapDrawable && d.bitmap != null) return d.bitmap
+        var w = d.intrinsicWidth
+        var h = d.intrinsicHeight
+        if (w <= 0 || h <= 0) { w = 320; h = 180 }
+        val s = maxOf(1f, 320f / maxOf(w, h))
+        w = (w * s).toInt(); h = (h * s).toInt()
+        val b = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
+        d.setBounds(0, 0, w, h)
+        d.draw(Canvas(b))
+        return b
+    }
+
+    // ---------- JavaScript bridge (window.Android) ----------
+
+    inner class Bridge {
+
+        @JavascriptInterface
+        fun getApps(): String {
+            val pm = packageManager
+            val out = LinkedHashMap<String, JSONObject>()
+            for (cat in listOf(Intent.CATEGORY_LEANBACK_LAUNCHER, Intent.CATEGORY_LAUNCHER)) {
+                val q = Intent(Intent.ACTION_MAIN).addCategory(cat)
+                for (ri in pm.queryIntentActivities(q, 0)) {
+                    val ai = ri.activityInfo
+                    val pkg = ai.packageName
+                    if (pkg == packageName || out.containsKey(pkg)) continue
+                    out[pkg] = JSONObject()
+                        .put("pkg", pkg)
+                        .put("label", ri.loadLabel(pm).toString())
+                        .put("banner", ai.banner != 0 || ai.applicationInfo.banner != 0)
+                        .put("tv", cat == Intent.CATEGORY_LEANBACK_LAUNCHER)
+                }
+            }
+            return JSONArray(out.values).toString()
+        }
+
+        @JavascriptInterface
+        fun launch(pkg: String) = runOnUiThread {
+            val pm = packageManager
+            val i = pm.getLeanbackLaunchIntentForPackage(pkg) ?: pm.getLaunchIntentForPackage(pkg)
+            if (i != null) runCatching { startActivity(i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) }
+        }
+
+        @JavascriptInterface
+        fun open(what: String) = runOnUiThread {
+            val i = when (what) {
+                "settings" -> Intent(Settings.ACTION_SETTINGS)
+                "wifi" -> Intent(Settings.ACTION_WIFI_SETTINGS)
+                "display" -> Intent(Settings.ACTION_DISPLAY_SETTINGS)
+                "apps" -> Intent(Settings.ACTION_APPLICATION_SETTINGS)
+                "screensaver" -> Intent(Intent.ACTION_MAIN)
+                    .setClassName("com.android.systemui", "com.android.systemui.Somnambulator")
+                else -> null
+            }
+            if (i != null) runCatching { startActivity(i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) }
+        }
+
+        @JavascriptInterface
+        fun appInfo(pkg: String) = runOnUiThread {
+            runCatching {
+                startActivity(
+                    Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:$pkg"))
+                        .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                )
+            }
+        }
+    }
+}
+=====FILE app/src/main/assets/index.html=====
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Horizon Launcher</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Outfit:wght@200;300;400;500;600&display=swap" rel="stylesheet">
+<style>
+:root{--glow:#7a8cff;--s1:#03040d;--s2:#0a0f2c;--s3:#1b1340}
+*{box-sizing:border-box;margin:0;padding:0}
+html,body{width:100%;height:100%;overflow:hidden;background:#000;color:#fff;
+  font-family:Outfit,"Google Sans",Roboto,system-ui,sans-serif;-webkit-font-smoothing:antialiased;user-select:none;cursor:default}
+#stage{position:absolute;left:0;top:0;width:1920px;height:1080px;transform-origin:0 0;overflow:hidden;background:#000}
+
+/* ---------- living sky ---------- */
+#sky{position:absolute;inset:0;background:linear-gradient(180deg,var(--s1) 0%,var(--s2) 55%,var(--s3) 100%)}
+#stars{position:absolute;inset:0;transition:opacity 3s}
+.blob{position:absolute;border-radius:50%;pointer-events:none;mix-blend-mode:screen;
+  background:radial-gradient(closest-side,currentColor,transparent);transition:color 1.4s ease}
+.b1{width:1500px;height:1500px;left:-300px;top:280px;color:var(--glow);opacity:.38;animation:d1 38s ease-in-out infinite alternate}
+.b2{width:1100px;height:1100px;right:-320px;top:-360px;color:var(--s3);opacity:.6;animation:d2 46s ease-in-out infinite alternate}
+.b3{width:900px;height:900px;left:820px;top:560px;color:var(--glow);opacity:.24;animation:d3 52s ease-in-out infinite alternate}
+@keyframes d1{to{transform:translate(260px,-140px) scale(1.15)}}
+@keyframes d2{to{transform:translate(-220px,160px) scale(.9)}}
+@keyframes d3{to{transform:translate(-340px,-80px) scale(1.2)}}
+#shade{position:absolute;inset:0;transition:opacity 1.2s;
+  background:linear-gradient(180deg,rgba(0,0,8,0) 22%,rgba(0,0,10,.42) 58%,rgba(0,0,14,.8) 100%)}
+
+/* ---------- header ---------- */
+#ui{position:absolute;inset:0;transition:opacity .5s ease,transform .7s cubic-bezier(.2,.8,.2,1)}
+header{position:absolute;left:96px;right:96px;top:58px;display:flex;justify-content:space-between;align-items:flex-start}
+.greet{font-size:24px;font-weight:400;letter-spacing:.34em;text-transform:uppercase;opacity:.7}
+#time{font-size:168px;font-weight:200;letter-spacing:-.045em;line-height:1;margin-top:8px}
+#time small,#aTime small{font-size:.26em;font-weight:300;letter-spacing:0;margin-left:16px;opacity:.7}
+#date{font-size:34px;font-weight:300;opacity:.82;margin-top:8px}
+.arc{width:380px;text-align:right;padding-top:18px}
+.arc svg{width:380px;height:170px;overflow:visible;display:block}
+.arc .base{fill:none;stroke:rgba(255,255,255,.28);stroke-width:2;stroke-dasharray:.005 .013;stroke-linecap:round}
+.arc .prog{fill:none;stroke:url(#pg);stroke-width:3;stroke-linecap:round;transition:stroke-dasharray 1s}
+#orb{transition:fill 2s}
+#arcText{font-size:22px;opacity:.78;letter-spacing:.05em;margin-top:6px}
+
+/* ---------- rows ---------- */
+.rows{position:absolute;left:0;right:0;top:372px}
+.row{margin-bottom:4px}
+.row h2{font-size:22px;font-weight:500;letter-spacing:.26em;text-transform:uppercase;opacity:.5;margin:0 96px;transition:opacity .3s}
+.row h2 span{opacity:.55;margin-left:12px;letter-spacing:.08em}
+.row.active h2{opacity:1}
+.view{overflow:hidden;padding:30px 0 64px;margin-top:-12px}
+.dock .view{padding-bottom:20px}
+.track{position:relative;display:flex;gap:30px;padding:0 96px;transition:transform .45s cubic-bezier(.2,.8,.2,1);will-change:transform}
+
+.card{position:relative;flex:none;border-radius:20px;background:rgba(255,255,255,.06);
+  box-shadow:0 12px 30px -14px rgba(0,0,0,.7);
+  transition:transform .32s cubic-bezier(.2,.8,.2,1),box-shadow .32s}
+.card.lg{width:340px;height:191px}
+.card.md{width:240px;height:135px;border-radius:16px}
+.art{position:absolute;inset:0;border-radius:inherit;overflow:hidden}
+.art img.ban{width:100%;height:100%;object-fit:cover;display:block}
+.art.tile{display:flex;align-items:center;gap:18px;padding:0 24px;background:rgba(255,255,255,.08);
+  background:linear-gradient(145deg,color-mix(in srgb,var(--accent,#5b6cff) 48%,#141726),#0c0e1a 88%)}
+.art.tile img.ico{width:84px;height:84px;flex:none;object-fit:contain;filter:drop-shadow(0 6px 14px rgba(0,0,0,.45))}
+.md .art.tile img.ico{width:58px;height:58px}
+.art.tile span{font-size:25px;font-weight:500;line-height:1.15;overflow:hidden;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical}
+.md .art.tile span{font-size:19px}
+.art.mock span{position:absolute;left:24px;bottom:18px;font-size:34px;font-weight:600;letter-spacing:-.01em;text-shadow:0 2px 14px rgba(0,0,0,.35)}
+.md .art.mock span{font-size:24px;left:18px;bottom:12px}
+.art.mock::before{content:"";position:absolute;right:-25%;top:-70%;width:90%;height:170%;background:radial-gradient(closest-side,rgba(255,255,255,.3),transparent)}
+.art::after{content:"";position:absolute;inset:0;transform:translateX(-130%);
+  background:linear-gradient(105deg,transparent 35%,rgba(255,255,255,.32) 50%,transparent 65%)}
+.card.focus .art::after{animation:shine 1.1s .08s ease-out}
+@keyframes shine{to{transform:translateX(130%)}}
+.card.focus{transform:scale(1.1);z-index:2;box-shadow:0 0 0 4px #fff,0 28px 64px -14px var(--accent,#fff)}
+.card.press{transform:scale(1.18)}
+.label{position:absolute;left:4px;top:100%;margin-top:16px;white-space:nowrap;font-size:22px;opacity:0;transform:translateY(-6px);transition:.25s}
+.md .label{font-size:18px;margin-top:12px}
+.card.focus .label{opacity:.95;transform:none}
+.star{display:none;position:absolute;top:10px;right:10px;width:28px;height:28px;border-radius:50%;background:rgba(0,0,0,.5);
+  align-items:center;justify-content:center;font-style:normal;font-size:15px;color:#ffd36b}
+.star::before{content:"★"}
+.pinned .star{display:flex}
+.empty{height:191px;display:flex;align-items:center;font-size:26px;opacity:.6;border:2px dashed rgba(255,255,255,.22);border-radius:20px;padding:0 44px}
+
+.pill{flex:none;display:flex;align-items:center;gap:14px;height:68px;padding:0 30px;border-radius:999px;font-size:24px;
+  background:rgba(255,255,255,.08);border:1px solid rgba(255,255,255,.13);transition:transform .25s,background .25s,color .25s,box-shadow .25s}
+.pill svg{width:28px;height:28px;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}
+.pill.focus{background:#fff;color:#0b0d1a;transform:scale(1.08);box-shadow:0 14px 40px -10px rgba(255,255,255,.55)}
+
+/* ---------- launch burst, toast, ambient ---------- */
+.burst{position:absolute;width:40px;height:40px;border-radius:50%;background:var(--c,#fff);z-index:50;pointer-events:none;
+  transform:translate(-50%,-50%) scale(0);transition:transform .6s cubic-bezier(.7,0,.3,1),opacity .5s}
+.burst.go{transform:translate(-50%,-50%) scale(120)}
+.burst.fade{opacity:0}
+#toast{position:absolute;left:50%;top:60px;z-index:60;transform:translate(-50%,-24px);opacity:0;padding:16px 32px;border-radius:999px;
+  background:rgba(10,12,24,.78);border:1px solid rgba(255,255,255,.16);font-size:26px;transition:opacity .3s,transform .3s}
+#toast.show{opacity:1;transform:translate(-50%,0)}
+#hint{position:absolute;top:16px;left:50%;transform:translateX(-50%);font-size:18px;letter-spacing:.05em;opacity:.55;
+  padding:8px 18px;border-radius:999px;background:rgba(0,0,0,.28);display:none}
+#ambient{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;opacity:0;pointer-events:none;transition:opacity 1.4s}
+#ambient .inner{animation:float 14s ease-in-out infinite;text-align:center}
+#aTime{font-size:300px;font-weight:200;letter-spacing:-.05em;line-height:1}
+#aDate{font-size:40px;font-weight:300;opacity:.72;margin-top:18px;letter-spacing:.04em}
+@keyframes float{50%{transform:translateY(-18px)}}
+body.ambient #ui{opacity:0;transform:scale(.96)}
+body.ambient #ambient{opacity:1}
+body.ambient #shade{opacity:.35}
+</style>
+</head>
+<body>
+<div id="stage">
+  <div id="sky"></div>
+  <canvas id="stars" width="1920" height="1080"></canvas>
+  <div class="blob b1"></div><div class="blob b2"></div><div class="blob b3"></div>
+  <div id="shade"></div>
+
+  <div id="ui">
+    <header>
+      <div>
+        <div class="greet" id="greet">Good evening</div>
+        <div id="time">--:--</div>
+        <div id="date"></div>
+      </div>
+      <div class="arc">
+        <svg viewBox="0 0 380 170">
+          <defs>
+            <radialGradient id="haloG"><stop offset="0" stop-color="#fff" stop-opacity=".5"/><stop offset="1" stop-color="#fff" stop-opacity="0"/></radialGradient>
+            <linearGradient id="pg" x1="0" x2="1"><stop offset="0" stop-color="#fff" stop-opacity=".1"/><stop offset="1" stop-color="#fff" stop-opacity=".95"/></linearGradient>
+          </defs>
+          <line x1="0" y1="150" x2="380" y2="150" stroke="rgba(255,255,255,.25)" stroke-width="1.5"/>
+          <path class="base" d="M20,150 A170,120 0 0 1 360,150" pathLength="1"/>
+          <path id="prog" class="prog" d="M20,150 A170,120 0 0 1 360,150" pathLength="1"/>
+          <circle id="halo" r="36" fill="url(#haloG)"/>
+          <circle id="orb" r="11" fill="#ffd27a"/>
+        </svg>
+        <div id="arcText"></div>
+      </div>
+    </header>
+
+    <div class="rows">
+      <section class="row"><h2>Favourites</h2><div class="view"><div class="track" id="favs"></div></div></section>
+      <section class="row"><h2>All apps<span id="allCount"></span></h2><div class="view"><div class="track" id="all"></div></div></section>
+      <section class="row dock"><div class="view"><div class="track" id="dock"></div></div></section>
+    </div>
+  </div>
+
+  <div id="ambient"><div class="inner"><div id="aTime"></div><div id="aDate"></div></div></div>
+  <div id="toast"></div>
+  <div id="hint">Preview · arrows to move · Enter to open · M (or hold Enter) to pin</div>
+</div>
+
+<script>
+(() => {
+'use strict';
+/* ====== settings you may want to tweak ====== */
+const SUNRISE = 6.25;      // hours, local time (approx for Dubai)
+const SUNSET  = 17.85;
+const IDLE_MS = 120000;    // ambient clock after 2 min idle
+const FAV_KEY = 'horizon.favs';
+const PREFERRED = ['com.google.android.youtube.tv','com.netflix.ninja','com.amazon.amazonvideo.livingroom',
+  'com.disney.disneyplus','com.spotify.tv.android','net.mbc.shahid.tv','com.plexapp.android'];
+
+const bridge = window.Android || null;
+const $ = s => document.querySelector(s);
+const stage = $('#stage');
+const esc = s => String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const store = {
+  get(k, d){ try { const v = localStorage.getItem(k); return v ? JSON.parse(v) : d; } catch(e){ return d; } },
+  set(k, v){ try { localStorage.setItem(k, JSON.stringify(v)); } catch(e){} }
+};
+
+/* ====== scale 1920x1080 stage to any screen ====== */
+let fitX = 0, fitY = 0, fitS = 1;
+function fit(){
+  fitS = Math.min(innerWidth / 1920, innerHeight / 1080);
+  fitX = (innerWidth - 1920 * fitS) / 2; fitY = (innerHeight - 1080 * fitS) / 2;
+  stage.style.transform = `translate(${fitX}px,${fitY}px) scale(${fitS})`;
+}
+addEventListener('resize', fit); fit();
+
+/* ====== toast ====== */
+let toastT;
+function toast(msg){
+  const t = $('#toast'); t.textContent = msg; t.classList.add('show');
+  clearTimeout(toastT); toastT = setTimeout(() => t.classList.remove('show'), 1800);
+}
+
+/* ====== clock, sky and sun arc ====== */
+const fmtDate = new Intl.DateTimeFormat(undefined, {weekday:'long', day:'numeric', month:'long'});
+const fmtTime = new Intl.DateTimeFormat(undefined, {hour:'numeric', minute:'2-digit'});
+function timeHTML(d){
+  let main = '', suf = '';
+  for (const p of fmtTime.formatToParts(d)) { if (p.type === 'dayPeriod') suf = p.value; else main += p.value; }
+  return esc(main.trim()) + (suf ? `<small>${esc(suf)}</small>` : '');
+}
+function greeting(h){
+  if (h < 5) return 'Late night'; if (h < 12) return 'Good morning';
+  if (h < 17) return 'Good afternoon'; if (h < 21) return 'Good evening'; return 'Good night';
+}
+const ANCH = [
+  [0,   ['#03040d','#0a0f2c','#1b1340']],
+  [5,   ['#05081a','#1c1a4a','#3b2a5e']],
+  [6.3, ['#1d2457','#7a4a86','#f39a6b']],
+  [8,   ['#2a5fb8','#4f8cdc','#a9d2ff']],
+  [12,  ['#1d58c4','#3f86e0','#8fc4f5']],
+  [16,  ['#2a4fa8','#6a7fc8','#f2c39b']],
+  [17.6,['#2b2560','#b0577a','#ffa66e']],
+  [18.6,['#151a46','#4b2766','#c4515a']],
+  [20,  ['#070a22','#121638','#26184a']],
+  [24,  ['#03040d','#0a0f2c','#1b1340']]
+];
+const hex = h => { const n = parseInt(h.slice(1), 16); return [n >> 16, n >> 8 & 255, n & 255]; };
+const lerpC = (a, b, t) => { const A = hex(a), B = hex(b); return A.map((v, i) => Math.round(v + (B[i] - v) * t)); };
+let night = 1;
+function updateSky(h){
+  for (let i = 0; i < ANCH.length - 1; i++) {
+    const [h0, c0] = ANCH[i], [h1, c1] = ANCH[i + 1];
+    if (h >= h0 && h <= h1) {
+      const t = (h - h0) / (h1 - h0);
+      const cols = c0.map((c, j) => lerpC(c, c1[j], t));
+      cols.forEach((c, j) => document.documentElement.style.setProperty('--s' + (j + 1), `rgb(${c.join(',')})`));
+      const top = cols[0], lum = 0.2126 * top[0] + 0.7152 * top[1] + 0.0722 * top[2];
+      night = Math.max(0, Math.min(1, 1 - lum / 70));
+      $('#stars').style.opacity = night;
+      return;
+    }
+  }
+}
+function updateArc(h){
+  const day = h >= SUNRISE && h < SUNSET;
+  let t, rem;
+  if (day) { t = (h - SUNRISE) / (SUNSET - SUNRISE); rem = SUNSET - h; }
+  else {
+    const len = 24 - SUNSET + SUNRISE, since = h >= SUNSET ? h - SUNSET : h + 24 - SUNSET;
+    t = since / len; rem = len - since;
+  }
+  const a = Math.PI * t, x = 190 - 170 * Math.cos(a), y = 150 - 120 * Math.sin(a);
+  for (const id of ['#orb', '#halo']) { $(id).setAttribute('cx', x.toFixed(1)); $(id).setAttribute('cy', y.toFixed(1)); }
+  $('#orb').setAttribute('fill', day ? '#ffd27a' : '#e6ebff');
+  $('#prog').style.strokeDasharray = `${t.toFixed(4)} 1`;
+  let hh = Math.floor(rem), mm = Math.round((rem - hh) * 60);
+  if (mm === 60) { hh++; mm = 0; }
+  $('#arcText').textContent = `${day ? 'Sunset' : 'Sunrise'} in ${hh ? hh + 'h ' : ''}${mm}m`;
+}
+let lastMin = -1;
+function tick(){
+  const d = new Date(), m = d.getHours() * 60 + d.getMinutes();
+  if (m === lastMin) return; lastMin = m;
+  const h = m / 60, th = timeHTML(d), ds = fmtDate.format(d);
+  $('#time').innerHTML = th; $('#aTime').innerHTML = th;
+  $('#date').textContent = ds; $('#aDate').textContent = ds;
+  $('#greet').textContent = greeting(d.getHours());
+  updateSky(h); updateArc(h);
+}
+
+/* ====== stars + shooting stars ====== */
+const cv = $('#stars'), cx = cv.getContext('2d');
+const stars = Array.from({length: 230}, () => ({
+  x: Math.random() * 1920, y: Math.pow(Math.random(), 1.7) * 820,
+  r: Math.random() * 1.4 + 0.3, p: Math.random() * 6.28, s: 0.4 + Math.random() * 1.6
+}));
+let shoot = null, lastF = 0, cleared = false;
+function frame(ts){
+  requestAnimationFrame(frame);
+  if (ts - lastF < 40) return; lastF = ts;
+  if (night < 0.05 || document.hidden) { if (!cleared) { cx.clearRect(0, 0, 1920, 1080); cleared = true; } return; }
+  cleared = false;
+  cx.clearRect(0, 0, 1920, 1080); cx.fillStyle = '#fff';
+  for (const s of stars) {
+    cx.globalAlpha = 0.3 + 0.7 * Math.abs(Math.sin(s.p + ts / 1000 * s.s));
+    cx.beginPath(); cx.arc(s.x, s.y, s.r, 0, 6.283); cx.fill();
+  }
+  if (!shoot && Math.random() < 0.004)
+    shoot = {x: 400 + Math.random() * 1300, y: 30 + Math.random() * 260, vx: -(16 + Math.random() * 8), vy: 6 + Math.random() * 4, life: 1};
+  if (shoot) {
+    const {x, y, vx, vy} = shoot, g = cx.createLinearGradient(x, y, x - vx * 9, y - vy * 9);
+    g.addColorStop(0, `rgba(255,255,255,${shoot.life})`); g.addColorStop(1, 'rgba(255,255,255,0)');
+    cx.globalAlpha = 1; cx.strokeStyle = g; cx.lineWidth = 2;
+    cx.beginPath(); cx.moveTo(x, y); cx.lineTo(x - vx * 9, y - vy * 9); cx.stroke();
+    shoot.x += vx; shoot.y += vy; shoot.life -= 0.03; if (shoot.life <= 0) shoot = null;
+  }
+  cx.globalAlpha = 1;
+}
+
+/* ====== apps ====== */
+const MOCK = [['YouTube','#ff3d3d','#6e0a0a'],['Netflix','#e50914','#250003'],['Prime Video','#1fa3ff','#0b2a4a'],
+  ['Disney+','#3d5dff','#0a1240'],['Spotify','#1ed760','#06351a'],['Shahid','#22e3a5','#05302a'],['OSN+','#ff7a1a','#3a1500'],
+  ['Plex','#ffb400','#2a1d00'],['Twitch','#a970ff','#1d0b3d'],['Apple TV','#c9d1dc','#1c1f24'],['Kodi','#30b4e8','#062433'],
+  ['Chrome','#f4c20d','#3d2f00'],['Photos','#ff8ab3','#3d0a1e'],['Play Store','#00d084','#003b26']]
+  .map(([label, a, b], i) => ({pkg: 'preview.app' + i, label, mock: [a, b]}));
+
+let apps = [], byPkg = {}, favs = [];
+const accent = {};
+
+function loadApps(){
+  let list = MOCK.slice();
+  if (bridge) { try { list = JSON.parse(bridge.getApps()); } catch (e) { list = []; } }
+  list.sort((a, b) => a.label.localeCompare(b.label));
+  apps = list; byPkg = {}; list.forEach(a => byPkg[a.pkg] = a);
+  let f = store.get(FAV_KEY + (bridge ? '' : '.preview'), null);
+  if (!f) {
+    f = bridge ? PREFERRED.filter(p => byPkg[p])
+               : ['YouTube','Netflix','Prime Video','Disney+','Spotify','Shahid'].map(l => list.find(a => a.label === l).pkg);
+    for (const a of list) { if (f.length >= 6) break; if (!f.includes(a.pkg)) f.push(a.pkg); }
+    saveFavs(f);
+  }
+  favs = f.filter(p => byPkg[p]);
+  render();
+}
+function saveFavs(f){ store.set(FAV_KEY + (bridge ? '' : '.preview'), f); }
+
+function sample(img){
+  try {
+    const c = document.createElement('canvas'); c.width = c.height = 24;
+    const x = c.getContext('2d'); x.drawImage(img, 0, 0, 24, 24);
+    const d = x.getImageData(0, 0, 24, 24).data;
+    let r = 0, g = 0, b = 0, w = 0;
+    for (let i = 0; i < d.length; i += 4) {
+      const R = d[i], G = d[i + 1], B = d[i + 2], A = d[i + 3] / 255;
+      const mx = Math.max(R, G, B), mn = Math.min(R, G, B), s = (mx - mn) / 255;
+      const wt = A * (0.08 + s * s * 3) * (mx > 40 ? 1 : 0.1);
+      r += R * wt; g += G * wt; b += B * wt; w += wt;
+    }
+    return w ? `rgb(${r / w | 0},${g / w | 0},${b / w | 0})` : null;
+  } catch (e) { return null; }
+}
+
+function makeCard(a, size){
+  const el = document.createElement('div');
+  el.className = 'card ' + size; el.dataset.pkg = a.pkg;
+  let art;
+  if (a.mock) art = `<div class="art mock" style="background:linear-gradient(135deg,${a.mock[0]},${a.mock[1]})"><span>${esc(a.label)}</span></div>`;
+  else {
+    const src = '/icon/' + encodeURIComponent(a.pkg);
+    art = a.banner ? `<div class="art"><img class="ban" src="${src}" alt=""></div>`
+                   : `<div class="art tile"><img class="ico" src="${src}" alt=""><span>${esc(a.label)}</span></div>`;
+  }
+  el.innerHTML = art + `<div class="label">${esc(a.label)}</div><i class="star"></i>`;
+  const known = a.mock ? a.mock[0] : accent[a.pkg];
+  if (known) el.style.setProperty('--accent', known);
+  else {
+    const img = el.querySelector('img');
+    img.addEventListener('load', () => {
+      const c = sample(img); if (!c) return;
+      accent[a.pkg] = c; el.style.setProperty('--accent', c);
+      if (el.classList.contains('focus')) setGlow(c);
+    }, {once: true});
+  }
+  return el;
+}
+
+/* ====== quick actions ====== */
+const I = {
+  settings: '<circle cx="12" cy="12" r="3.2"/><path d="M12 2.5v3M12 18.5v3M2.5 12h3M18.5 12h3M5.3 5.3l2.1 2.1M16.6 16.6l2.1 2.1M5.3 18.7l2.1-2.1M16.6 7.4l2.1-2.1"/>',
+  wifi: '<path d="M2.5 8.8a14 14 0 0 1 19 0M5.5 12.2a9.5 9.5 0 0 1 13 0M8.6 15.5a5 5 0 0 1 6.8 0"/><circle cx="12" cy="19" r="1"/>',
+  display: '<rect x="3" y="4" width="18" height="12" rx="2"/><path d="M8 20h8M12 16v4"/>',
+  apps: '<rect x="4" y="4" width="6.5" height="6.5" rx="1.5"/><rect x="13.5" y="4" width="6.5" height="6.5" rx="1.5"/><rect x="4" y="13.5" width="6.5" height="6.5" rx="1.5"/><rect x="13.5" y="13.5" width="6.5" height="6.5" rx="1.5"/>',
+  moon: '<path d="M20 14.5A8 8 0 1 1 9.5 4a6.5 6.5 0 0 0 10.5 10.5z"/>',
+  spark: '<path d="M12 3l1.8 5.2L19 10l-5.2 1.8L12 17l-1.8-5.2L5 10l5.2-1.8zM19 16l.7 1.9 1.8.6-1.8.7L19 21l-.7-1.8-1.8-.7 1.8-.6z"/>'
+};
+const sys = (what, label) => () => bridge ? bridge.open(what) : toast(`Would open ${label}`);
+const DOCK = [
+  {label: 'Settings',    icon: I.settings, run: sys('settings', 'Settings')},
+  {label: 'Wi‑Fi',       icon: I.wifi,     run: sys('wifi', 'Wi‑Fi settings')},
+  {label: 'Display',     icon: I.display,  run: sys('display', 'Display settings')},
+  {label: 'Manage apps', icon: I.apps,     run: sys('apps', 'App settings')},
+  {label: 'Screensaver', icon: I.moon,     run: sys('screensaver', 'the screensaver')},
+  {label: 'Ambient',     icon: I.spark,    run: () => enterAmbient()}
+];
+
+/* ====== rendering & focus ====== */
+const tracks = [$('#favs'), $('#all'), $('#dock')];
+const rowsEl = [...document.querySelectorAll('.row')];
+const rowEls = [[], [], []], off = [0, 0, 0], col = [0, 0, 0];
+let fr = 0;
+
+function render(){
+  [favs.map(p => byPkg[p]), apps].forEach((list, r) => {
+    tracks[r].innerHTML = '';
+    rowEls[r] = list.map(a => {
+      const el = makeCard(a, r === 0 ? 'lg' : 'md');
+      if (r === 1 && favs.includes(a.pkg)) el.classList.add('pinned');
+      el.addEventListener('click', () => { focusEl(r, el); activate(); });
+      tracks[r].appendChild(el); return el;
+    });
+  });
+  if (!favs.length) tracks[0].innerHTML = '<div class="empty">Hold OK on any app to pin it here</div>';
+  tracks[2].innerHTML = '';
+  rowEls[2] = DOCK.map(d => {
+    const el = document.createElement('div'); el.className = 'pill';
+    el.innerHTML = `<svg viewBox="0 0 24 24">${d.icon}</svg><span>${d.label}</span>`;
+    el.addEventListener('click', () => { focusEl(2, el); activate(); });
+    tracks[2].appendChild(el); return el;
+  });
+  $('#allCount').textContent = apps.length;
+  for (let r = 0; r < 3; r++) col[r] = Math.min(col[r], Math.max(0, rowEls[r].length - 1));
+  if (!rowEls[fr].length) fr = rowEls.findIndex(x => x.length);
+  applyFocus(true);
+}
+function setGlow(c){ if (c) document.documentElement.style.setProperty('--glow', c); }
+function focusEl(r, el){ fr = r; col[r] = rowEls[r].indexOf(el); applyFocus(); }
+function applyFocus(instant){
+  document.querySelectorAll('.focus').forEach(e => e.classList.remove('focus'));
+  rowsEl.forEach((r, i) => r.classList.toggle('active', i === fr));
+  const el = rowEls[fr] && rowEls[fr][col[fr]]; if (!el) return;
+  el.classList.add('focus');
+  const view = el.parentElement.parentElement.clientWidth, m = 96, left = el.offsetLeft, right = left + el.offsetWidth;
+  let o = off[fr];
+  if (left - o < m) o = left - m;
+  if (right - o > view - m) o = right - view + m;
+  off[fr] = o = Math.max(0, o);
+  const tr = tracks[fr];
+  if (instant) tr.style.transition = 'none';
+  tr.style.transform = `translateX(${-o}px)`;
+  if (instant) { void tr.offsetWidth; tr.style.transition = ''; }
+  if (fr < 2) setGlow(el.style.getPropertyValue('--accent'));
+}
+function bump(dx, dy){
+  const el = rowEls[fr][col[fr]];
+  if (el && el.animate) el.animate([{translate: '0 0'}, {translate: `${dx * 12}px ${dy * 12}px`}, {translate: '0 0'}], {duration: 260, easing: 'ease-out'});
+}
+function move(dr, dc){
+  if (dc) {
+    const c = Math.max(0, Math.min(rowEls[fr].length - 1, col[fr] + dc));
+    if (c === col[fr]) return bump(dc, 0);
+    col[fr] = c;
+  }
+  if (dr) {
+    let r = fr + dr;
+    while (r >= 0 && r < 3 && !rowEls[r].length) r += dr;
+    if (r < 0 || r > 2) return bump(0, dr);
+    const cur = rowEls[fr][col[fr]].getBoundingClientRect(), x = cur.left + cur.width / 2;
+    let best = 0, bd = Infinity;
+    rowEls[r].forEach((e, i) => { const b = e.getBoundingClientRect(), d = Math.abs(b.left + b.width / 2 - x); if (d < bd) { bd = d; best = i; } });
+    col[r] = best; fr = r;
+  }
+  applyFocus();
+}
+
+/* ====== actions ====== */
+let launching = false;
+function activate(){
+  const el = rowEls[fr][col[fr]]; if (!el) return;
+  if (fr === 2) return DOCK[col[2]].run();
+  launch(byPkg[el.dataset.pkg], el);
+}
+function launch(a, el){
+  if (launching || !a) return; launching = true;
+  const r = el.getBoundingClientRect();
+  const b = document.createElement('div'); b.className = 'burst';
+  b.style.left = (r.left + r.width / 2 - fitX) / fitS + 'px';
+  b.style.top = (r.top + r.height / 2 - fitY) / fitS + 'px';
+  b.style.setProperty('--c', el.style.getPropertyValue('--accent') || '#fff');
+  stage.appendChild(b); el.classList.add('press');
+  requestAnimationFrame(() => requestAnimationFrame(() => b.classList.add('go')));
+  setTimeout(() => { if (bridge) bridge.launch(a.pkg); else toast(`Opening ${a.label}…`); }, 450);
+  setTimeout(() => {
+    b.classList.add('fade'); setTimeout(() => b.remove(), 600);
+    el.classList.remove('press'); launching = false;
+  }, bridge ? 1500 : 950);
+}
+function togglePin(){
+  if (fr === 2) return;
+  const el = rowEls[fr][col[fr]]; if (!el) return;
+  const pkg = el.dataset.pkg, a = byPkg[pkg], i = favs.indexOf(pkg);
+  if (i >= 0) { favs.splice(i, 1); toast(`Removed ${a.label} from favourites`); }
+  else { favs.push(pkg); toast(`★ Pinned ${a.label}`); }
+  saveFavs(favs); render();
+}
+
+/* ====== ambient mode ====== */
+let idleT, ambient = false, swallow = false;
+function poke(){ clearTimeout(idleT); idleT = setTimeout(enterAmbient, IDLE_MS); }
+function enterAmbient(){ ambient = true; document.body.classList.add('ambient'); }
+function exitAmbient(){ ambient = false; document.body.classList.remove('ambient'); poke(); }
+
+/* ====== remote / keyboard ====== */
+const OK = k => k === 'Enter' || k === ' ' || k === 'NumpadEnter';
+let downAt = 0, longDone = false;
+addEventListener('keydown', e => {
+  if (ambient) { e.preventDefault(); swallow = true; exitAmbient(); return; }
+  poke();
+  const k = e.key;
+  if (k === 'ArrowLeft') move(0, -1);
+  else if (k === 'ArrowRight') move(0, 1);
+  else if (k === 'ArrowUp') move(-1, 0);
+  else if (k === 'ArrowDown') move(1, 0);
+  else if (OK(k)) {
+    if (!e.repeat) { downAt = Date.now(); longDone = false; }
+    else if (!longDone && downAt && Date.now() - downAt > 600) { longDone = true; togglePin(); }
+  }
+  else if (k === 'ContextMenu' || k === 'm' || k === 'M') togglePin();
+  else return;
+  e.preventDefault();
+});
+addEventListener('keyup', e => {
+  if (swallow) { swallow = false; downAt = 0; return; }
+  if (OK(e.key)) { if (downAt && !longDone) activate(); downAt = 0; }
+});
+document.addEventListener('mousemove', () => { if (ambient) exitAmbient(); else poke(); });
+
+/* ====== hooks called from the Android shell ====== */
+function goHome(){ if (ambient) exitAmbient(); fr = rowEls[0].length ? 0 : 1; col[fr] = 0; applyFocus(); }
+window.onBack = () => { if (ambient) exitAmbient(); else goHome(); };
+window.onHome = goHome;
+window.onMenu = () => { if (ambient) exitAmbient(); else togglePin(); };
+window.onResumeLauncher = () => {
+  launching = false; document.querySelectorAll('.burst').forEach(b => b.remove());
+  document.querySelectorAll('.press').forEach(b => b.classList.remove('press'));
+  loadApps(); poke();
+};
+
+/* ====== go ====== */
+if (!bridge) $('#hint').style.display = 'block';
+loadApps(); tick(); setInterval(tick, 1000);
+requestAnimationFrame(frame); poke();
+})();
+</script>
+</body>
+</html>
