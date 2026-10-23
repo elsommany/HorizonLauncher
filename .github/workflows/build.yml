@@ -1,0 +1,66 @@
+name: Build Horizon APK
+
+on:
+  push:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Unpack project files from bundle.txt
+        run: |
+          python3 - <<'PY'
+          import os, re
+          cur, buf = None, []
+          def flush():
+              if cur:
+                  d = os.path.dirname(cur)
+                  if d:
+                      os.makedirs(d, exist_ok=True)
+                  with open(cur, 'w') as f:
+                      f.write(''.join(buf))
+          for line in open('bundle.txt', encoding='utf-8'):
+              m = re.match(r'^=====FILE (.+)=====$', line.rstrip('\n'))
+              if m:
+                  flush()
+                  cur, buf = m.group(1), []
+              else:
+                  buf.append(line)
+          flush()
+          PY
+          find . -path ./.git -prune -o -type f -print
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - uses: android-actions/setup-android@v3
+
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "8.7"
+
+      - name: Build APK
+        run: |
+          gradle assembleDebug --no-daemon
+          cp app/build/outputs/apk/debug/app-debug.apk horizon.apk
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Horizon-APK
+          path: horizon.apk
+
+      # Direct link: https://github.com/elsommany/HorizonLauncher/releases/latest/download/horizon.apk
+      - uses: softprops/action-gh-release@v2
+        with:
+          tag_name: build-${{ github.run_number }}
+          name: Horizon build ${{ github.run_number }}
+          make_latest: true
+          files: horizon.apk
